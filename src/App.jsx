@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import {
+  ResponsiveContainer, LineChart, Line,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend
+} from 'recharts';
 
 // Initialize Supabase client
 const supabaseUrl = 'https://tjxreolqbbqmbjkefmpe.supabase.co';
@@ -59,6 +63,9 @@ const ThreePotTracker = () => {
   const [history, setHistory] = useState([]);
   const [activityPatterns, setActivityPatterns] = useState({});
   const [showHistory, setShowHistory] = useState(false);
+  const [historyView, setHistoryView] = useState('chart'); // 'chart' | 'log'
+  const [chartDays, setChartDays] = useState(7);
+  const [showActivityOverlay, setShowActivityOverlay] = useState(true);
   const [showReference, setShowReference] = useState(false);
   const [openRefPots, setOpenRefPots] = useState(new Set());
   const [openRefZones, setOpenRefZones] = useState(new Set());
@@ -501,6 +508,28 @@ const ThreePotTracker = () => {
     setFoodEntries([]);
     setFoodSearch('');
     setFoodDate(todayDate());
+  };
+
+  const getChartData = (days) => {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    return [...history]
+      .filter(e => new Date(e.created_at) >= cutoff)
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+      .map(e => {
+        const d = new Date(e.created_at);
+        return {
+          timestamp: d.getTime(),
+          label: d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+                 + '\n' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+          dateOnly: d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),
+          Physical: e.physical_level,
+          Cognitive: e.cognitive_level,
+          'Emotional/Sensory': e.emotional_level,
+          activities: (e.activities || []),
+          hasActivities: (e.activities || []).length > 0,
+        };
+      });
   };
 
   const getZoneInfo = (level) => {
@@ -1257,67 +1286,135 @@ const ThreePotTracker = () => {
       <button
         onClick={() => setShowHistory(!showHistory)}
         style={{
-          width: '100%',
-          padding: '12px',
-          backgroundColor: '#F5F5F0',
-          color: '#2D6A4F',
-          border: '2px solid #2D6A4F',
-          borderRadius: '4px',
-          cursor: 'pointer',
-          fontSize: '1rem',
-          fontWeight: '600',
-          marginBottom: '10px',
-          fontFamily: "'Philosopher', sans-serif"
+          width: '100%', padding: '12px', backgroundColor: '#F5F5F0',
+          color: '#2D6A4F', border: '2px solid #2D6A4F', borderRadius: '4px',
+          cursor: 'pointer', fontSize: '1rem', fontWeight: '600',
+          marginBottom: '10px', fontFamily: "'Philosopher', sans-serif"
         }}
       >
         {showHistory ? 'Hide' : 'View'} History
       </button>
 
-      {/* History Display */}
-      {showHistory && history.length > 0 && (
-        <div style={{
-          backgroundColor: '#F5F5F0',
-          padding: '20px',
-          borderRadius: '8px',
-          marginBottom: '20px',
-          maxHeight: '400px',
-          overflowY: 'auto'
-        }}>
-          <h3 style={{
-            fontFamily: "'Philosopher', sans-serif",
-            color: '#2D6A4F',
-            marginTop: 0,
-            marginBottom: '15px'
-          }}>
-            Recent Check-ins
-          </h3>
-          {history.map((entry, idx) => (
-            <div key={idx} style={{
-              padding: '12px',
-              backgroundColor: '#fff',
-              borderRadius: '4px',
-              marginBottom: '10px',
-              borderLeft: `4px solid ${getZoneInfo(Math.min(entry.physical_level, entry.cognitive_level, entry.emotional_level)).color}`
-            }}>
-              <div style={{ 
-                fontSize: '0.85rem',
-                color: '#8C8C8C',
-                marginBottom: '8px'
-              }}>
-                {new Date(entry.created_at).toLocaleString()}
-              </div>
-              <div style={{ display: 'flex', gap: '15px', marginBottom: '8px' }}>
-                <span>💪 {entry.physical_level}%</span>
-                <span>🧠 {entry.cognitive_level}%</span>
-                <span>❤️ {entry.emotional_level}%</span>
-              </div>
-              {entry.activities && entry.activities.length > 0 && (
-                <div style={{ fontSize: '0.9rem', color: '#666' }}>
-                  {entry.activities.join(', ')}
+      {/* History Panel */}
+      {showHistory && (
+        <div style={{ backgroundColor: '#F5F5F0', borderRadius: '8px', marginBottom: '20px', overflow: 'hidden' }}>
+
+          {/* Tab bar */}
+          <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb' }}>
+            {['chart', 'log'].map(view => (
+              <button key={view} onClick={() => setHistoryView(view)}
+                style={{
+                  flex: 1, padding: '12px', border: 'none', cursor: 'pointer',
+                  fontFamily: "'Philosopher', sans-serif", fontWeight: '600', fontSize: '0.95rem',
+                  backgroundColor: historyView === view ? '#fff' : 'transparent',
+                  color: historyView === view ? '#2D6A4F' : '#8C8C8C',
+                  borderBottom: historyView === view ? '2px solid #2D6A4F' : 'none',
+                  marginBottom: historyView === view ? '-2px' : '0'
+                }}>
+                {view === 'chart' ? '📊 Chart' : '📋 Log'}
+              </button>
+            ))}
+          </div>
+
+          {/* Chart view */}
+          {historyView === 'chart' && (() => {
+            const chartData = getChartData(chartDays);
+            const btnStyle = (active) => ({
+              padding: '5px 14px', border: `1px solid ${active ? '#2D6A4F' : '#d1d5db'}`,
+              borderRadius: '20px', cursor: 'pointer', fontSize: '0.85rem',
+              backgroundColor: active ? '#2D6A4F' : 'transparent',
+              color: active ? '#fff' : '#666', fontFamily: "'Philosopher', sans-serif"
+            });
+            const CustomDot = (key) => (props) => {
+              const { cx, cy, payload } = props;
+              if (!showActivityOverlay || !payload.hasActivities) return <circle key={key} cx={cx} cy={cy} r={3} fill={props.stroke} />;
+              return <circle key={key} cx={cx} cy={cy} r={6} fill={props.stroke} stroke="#fff" strokeWidth={2} />;
+            };
+            const CustomTooltip = ({ active, payload, label }) => {
+              if (!active || !payload?.length) return null;
+              const entry = payload[0]?.payload;
+              return (
+                <div style={{ backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '6px', padding: '10px 14px', fontSize: '0.85rem', fontFamily: "'Sorts Mill Goudy', Georgia, serif", maxWidth: '200px' }}>
+                  <div style={{ color: '#8C8C8C', marginBottom: '6px', whiteSpace: 'pre-line' }}>{entry?.label}</div>
+                  {payload.map(p => (
+                    <div key={p.dataKey} style={{ color: p.color, marginBottom: '2px' }}>
+                      {p.dataKey}: <strong>{p.value}%</strong>
+                    </div>
+                  ))}
+                  {entry?.hasActivities && (
+                    <div style={{ marginTop: '6px', color: '#555', borderTop: '1px solid #e5e7eb', paddingTop: '6px' }}>
+                      {entry.activities.join(', ')}
+                    </div>
+                  )}
                 </div>
-              )}
+              );
+            };
+            return (
+              <div style={{ padding: '16px' }}>
+                {/* Controls row */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button style={btnStyle(chartDays === 7)} onClick={() => setChartDays(7)}>7 days</button>
+                    <button style={btnStyle(chartDays === 30)} onClick={() => setChartDays(30)}>30 days</button>
+                  </div>
+                  <button onClick={() => setShowActivityOverlay(p => !p)} style={btnStyle(showActivityOverlay)}>
+                    ◉ Activities
+                  </button>
+                </div>
+
+                {chartData.length < 2 ? (
+                  <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '40px 20px', fontFamily: "'Sorts Mill Goudy', Georgia, serif" }}>
+                    Not enough check-ins yet — check back after a few more entries.
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height={260}>
+                    <LineChart data={chartData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                      <XAxis dataKey="dateOnly" tick={{ fontSize: 11, fill: '#8C8C8C' }} interval="preserveStartEnd" />
+                      <YAxis domain={[0, 100]} tick={{ fontSize: 11, fill: '#8C8C8C' }} tickFormatter={v => `${v}%`} />
+                      <Tooltip content={<CustomTooltip />} />
+                      <Legend wrapperStyle={{ fontSize: '0.85rem', fontFamily: "'Philosopher', sans-serif", paddingTop: '8px' }} />
+                      <Line type="monotone" dataKey="Physical" stroke="#ef4444" strokeWidth={2} dot={CustomDot('p')} activeDot={{ r: 5 }} />
+                      <Line type="monotone" dataKey="Cognitive" stroke="#3b82f6" strokeWidth={2} dot={CustomDot('c')} activeDot={{ r: 5 }} />
+                      <Line type="monotone" dataKey="Emotional/Sensory" stroke="#8b5cf6" strokeWidth={2} dot={CustomDot('e')} activeDot={{ r: 5 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+
+                {showActivityOverlay && chartData.some(d => d.hasActivities) && (
+                  <div style={{ marginTop: '8px', fontSize: '0.8rem', color: '#8C8C8C', fontFamily: "'Sorts Mill Goudy', Georgia, serif" }}>
+                    ◉ Larger dots = check-in had activities logged
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Log view */}
+          {historyView === 'log' && (
+            <div style={{ padding: '16px', maxHeight: '400px', overflowY: 'auto' }}>
+              {history.length === 0 ? (
+                <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '30px', fontFamily: "'Sorts Mill Goudy', Georgia, serif" }}>No check-ins yet.</div>
+              ) : history.map((entry, idx) => (
+                <div key={idx} style={{
+                  padding: '12px', backgroundColor: '#fff', borderRadius: '4px', marginBottom: '10px',
+                  borderLeft: `4px solid ${getZoneInfo(Math.min(entry.physical_level, entry.cognitive_level, entry.emotional_level)).color}`
+                }}>
+                  <div style={{ fontSize: '0.85rem', color: '#8C8C8C', marginBottom: '6px' }}>
+                    {new Date(entry.created_at).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                  </div>
+                  <div style={{ display: 'flex', gap: '12px', marginBottom: entry.activities?.length ? '6px' : 0, fontSize: '0.9rem' }}>
+                    <span style={{ color: '#ef4444' }}>💪 {entry.physical_level}%</span>
+                    <span style={{ color: '#3b82f6' }}>🧠 {entry.cognitive_level}%</span>
+                    <span style={{ color: '#8b5cf6' }}>❤️ {entry.emotional_level}%</span>
+                  </div>
+                  {entry.activities?.length > 0 && (
+                    <div style={{ fontSize: '0.85rem', color: '#666' }}>{entry.activities.join(', ')}</div>
+                  )}
+                </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       )}
 
