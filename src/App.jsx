@@ -6,6 +6,30 @@ const supabaseUrl = 'https://tjxreolqbbqmbjkefmpe.supabase.co';
 const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRqeHJlb2xxYmJxbWJqa2VmbXBlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYxNjYyNDgsImV4cCI6MjA5MTc0MjI0OH0.aBVrTywm4D4XX6vYahcL3eFYTnLLVJu6OG4LAIZ4U-U';
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
+const DEFAULT_FOOD_ITEMS = [
+  'Water', 'Coffee', 'Tea', 'Juice', 'Smoothie', 'Energy drink', 'Alcohol',
+  'Toast', 'Cereal', 'Porridge', 'Yoghurt', 'Eggs', 'Fruit',
+  'Sandwich', 'Salad', 'Soup', 'Wrap', 'Sushi',
+  'Pasta', 'Rice', 'Curry', 'Stir fry', 'Pizza', 'Burger', 'Chips',
+  'Nuts', 'Crisps', 'Chocolate', 'Biscuits', 'Cake', 'Protein bar',
+  'Takeaway', 'Ready meal', 'Leftovers'
+];
+
+const MEAL_BUCKETS = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Drink'];
+
+const TIME_OPTIONS = (() => {
+  const times = [];
+  for (let h = 0; h < 24; h++) {
+    for (let m = 0; m < 60; m += 15) {
+      times.push(`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`);
+    }
+  }
+  return times;
+})();
+
+const todayDate = () => new Date().toISOString().split('T')[0];
+const yesterdayDate = () => new Date(Date.now() - 86400000).toISOString().split('T')[0];
+
 const PRESET_ACTIVITIES = [
   'Work', 'Meeting', 'Email', 'Deep work', 'Admin',
   'Social', 'Family time', 'Friend catch-up', 'Party', 'Date',
@@ -40,6 +64,24 @@ const ThreePotTracker = () => {
   const [openRefZones, setOpenRefZones] = useState(new Set());
   const [warningMessages, setWarningMessages] = useState([]);
   const [showWarningModal, setShowWarningModal] = useState(false);
+
+  // Sleep tracking
+  const [showSleepModal, setShowSleepModal] = useState(false);
+  const [sleepDate, setSleepDate] = useState(yesterdayDate());
+  const [sleepStart, setSleepStart] = useState('22:00');
+  const [sleepEnd, setSleepEnd] = useState('07:00');
+  const [sleepQuality, setSleepQuality] = useState(0);
+  const [hasLoggedSleepToday, setHasLoggedSleepToday] = useState(false);
+
+  // Food tracking
+  const [showFoodModal, setShowFoodModal] = useState(false);
+  const [foodDate, setFoodDate] = useState(todayDate());
+  const [foodSearch, setFoodSearch] = useState('');
+  const [allFoodItems, setAllFoodItems] = useState(DEFAULT_FOOD_ITEMS);
+  const [foodEntries, setFoodEntries] = useState([]);
+
+  // Post check-in tracking prompt
+  const [showTrackingPrompt, setShowTrackingPrompt] = useState(false);
 
   const [activitySearch, setActivitySearch] = useState('');
   const [allActivities, setAllActivities] = useState(PRESET_ACTIVITIES);
@@ -111,6 +153,30 @@ const ThreePotTracker = () => {
           ...customNames.filter(n => !PRESET_ACTIVITIES.includes(n))
         ]);
       }
+
+      // Load global food items
+      const { data: customFoodItems } = await supabase
+        .from('food_items')
+        .select('name')
+        .order('name');
+
+      if (customFoodItems?.length) {
+        const customFoodNames = customFoodItems.map(f => f.name);
+        setAllFoodItems([
+          ...DEFAULT_FOOD_ITEMS,
+          ...customFoodNames.filter(n => !DEFAULT_FOOD_ITEMS.includes(n))
+        ]);
+      }
+
+      // Check if sleep already logged today
+      const { data: sleepToday } = await supabase
+        .from('sleep_logs')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('sleep_date', todayDate())
+        .limit(1);
+
+      setHasLoggedSleepToday(!!(sleepToday?.length));
 
     } catch (error) {
       console.error('Error loading user data:', error);
@@ -198,6 +264,9 @@ const ThreePotTracker = () => {
 
       // Check for warnings
       checkWarnings(physicalPot, cognitivePot, emotionalPot);
+
+      // Prompt to track food/sleep if not yet done today
+      setShowTrackingPrompt(true);
 
       // Clear form
       setSelectedTags([]);
@@ -363,6 +432,75 @@ const ThreePotTracker = () => {
       setSelectedTags(prev => [...prev, customTag.trim()]);
       setCustomTag('');
     }
+  };
+
+  // --- Sleep helpers ---
+  const calcSleepDuration = (start, end) => {
+    const [sh, sm] = start.split(':').map(Number);
+    const [eh, em] = end.split(':').map(Number);
+    let startMins = sh * 60 + sm;
+    let endMins = eh * 60 + em;
+    if (endMins <= startMins) endMins += 24 * 60; // crosses midnight
+    return (endMins - startMins) / 60;
+  };
+
+  const saveSleep = async () => {
+    if (!sleepQuality) { alert('Please add a quality rating before saving.'); return; }
+    const duration = calcSleepDuration(sleepStart, sleepEnd);
+    const { error } = await supabase.from('sleep_logs').insert([{
+      user_id: user.id,
+      sleep_date: sleepDate,
+      sleep_start: sleepStart,
+      sleep_end: sleepEnd,
+      duration_hours: duration,
+      quality: sleepQuality
+    }]);
+    if (error) { console.error(error); alert('Error saving sleep log.'); return; }
+    setHasLoggedSleepToday(sleepDate === todayDate());
+    setShowSleepModal(false);
+    setSleepQuality(0);
+    setSleepDate(yesterdayDate());
+    setSleepStart('22:00');
+    setSleepEnd('07:00');
+  };
+
+  // --- Food helpers ---
+  const addFoodEntry = (name) => {
+    setFoodEntries(prev => [...prev, { name, time: '', bucket: '' }]);
+    setFoodSearch('');
+  };
+
+  const updateFoodEntry = (idx, field, value) => {
+    setFoodEntries(prev => prev.map((e, i) => i === idx ? { ...e, [field]: value } : e));
+  };
+
+  const removeFoodEntry = (idx) => {
+    setFoodEntries(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const addCustomFoodItem = async (name) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    await supabase.from('food_items').upsert({ name: trimmed, created_by: user.id }, { onConflict: 'name' });
+    setAllFoodItems(prev => prev.includes(trimmed) ? prev : [...prev, trimmed]);
+    addFoodEntry(trimmed);
+  };
+
+  const saveFood = async () => {
+    if (!foodEntries.length) { alert('Add at least one item before saving.'); return; }
+    const rows = foodEntries.map(e => ({
+      user_id: user.id,
+      log_date: foodDate,
+      log_time: e.time || null,
+      item_name: e.name,
+      meal_bucket: e.bucket || null
+    }));
+    const { error } = await supabase.from('food_logs').insert(rows);
+    if (error) { console.error(error); alert('Error saving food log.'); return; }
+    setShowFoodModal(false);
+    setFoodEntries([]);
+    setFoodSearch('');
+    setFoodDate(todayDate());
   };
 
   const getZoneInfo = (level) => {
@@ -1069,6 +1207,32 @@ const ThreePotTracker = () => {
           })()}
         </div>
 
+        {/* Food & Sleep quick-log buttons */}
+        <div style={{ display: 'flex', gap: '10px', marginBottom: '12px' }}>
+          <button
+            onClick={() => { setShowSleepModal(true); setSleepDate(yesterdayDate()); }}
+            style={{
+              flex: 1, padding: '10px', backgroundColor: '#F5F5F0',
+              color: '#2D6A4F', border: '2px solid #2D6A4F', borderRadius: '4px',
+              cursor: 'pointer', fontSize: '0.95rem', fontFamily: "'Philosopher', sans-serif",
+              fontWeight: '600'
+            }}
+          >
+            🌙 Log Sleep
+          </button>
+          <button
+            onClick={() => { setShowFoodModal(true); setFoodDate(todayDate()); }}
+            style={{
+              flex: 1, padding: '10px', backgroundColor: '#F5F5F0',
+              color: '#2D6A4F', border: '2px solid #2D6A4F', borderRadius: '4px',
+              cursor: 'pointer', fontSize: '0.95rem', fontFamily: "'Philosopher', sans-serif",
+              fontWeight: '600'
+            }}
+          >
+            🍽️ Log Food & Drink
+          </button>
+        </div>
+
         {/* Save Button */}
         <button
           onClick={saveCheckIn}
@@ -1154,6 +1318,192 @@ const ThreePotTracker = () => {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Post check-in tracking prompt */}
+      {showTrackingPrompt && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
+          <div style={{ backgroundColor: '#F5F5F0', borderRadius: '8px', padding: '28px', maxWidth: '380px', width: '100%' }}>
+            <h3 style={{ fontFamily: "'Philosopher', sans-serif", color: '#2D6A4F', marginTop: 0, marginBottom: '8px' }}>
+              Log anything else?
+            </h3>
+            <p style={{ color: '#666', fontSize: '0.9rem', marginBottom: '20px', lineHeight: '1.5' }}>
+              Track food, drink or sleep alongside this check-in to help spot patterns over time.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <button onClick={() => { setShowTrackingPrompt(false); setShowFoodModal(true); }}
+                style={{ padding: '12px', backgroundColor: '#F5F5F0', color: '#2D6A4F', border: '2px solid #2D6A4F', borderRadius: '4px', cursor: 'pointer', fontFamily: "'Philosopher', sans-serif", fontWeight: '600', fontSize: '1rem' }}>
+                🍽️ Log Food & Drink
+              </button>
+              {!hasLoggedSleepToday && (
+                <button onClick={() => { setShowTrackingPrompt(false); setShowSleepModal(true); }}
+                  style={{ padding: '12px', backgroundColor: '#F5F5F0', color: '#2D6A4F', border: '2px solid #2D6A4F', borderRadius: '4px', cursor: 'pointer', fontFamily: "'Philosopher', sans-serif", fontWeight: '600', fontSize: '1rem' }}>
+                  🌙 Log Sleep
+                </button>
+              )}
+              <button onClick={() => setShowTrackingPrompt(false)}
+                style={{ padding: '12px', backgroundColor: 'transparent', color: '#8C8C8C', border: '1px solid #d1d5db', borderRadius: '4px', cursor: 'pointer', fontFamily: "'Philosopher', sans-serif", fontSize: '0.95rem' }}>
+                No thanks
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sleep Modal */}
+      {showSleepModal && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
+          <div style={{ backgroundColor: '#F5F5F0', borderRadius: '8px', padding: '28px', maxWidth: '420px', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
+            <h3 style={{ fontFamily: "'Philosopher', sans-serif", color: '#2D6A4F', marginTop: 0, marginBottom: '20px' }}>
+              🌙 Log Sleep
+            </h3>
+
+            {/* Date */}
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontFamily: "'Philosopher', sans-serif", fontWeight: '600', color: '#333', marginBottom: '6px', fontSize: '0.95rem' }}>Night of</label>
+              <input type="date" value={sleepDate} onChange={e => setSleepDate(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid #8C8C8C', borderRadius: '4px', fontSize: '0.9rem', boxSizing: 'border-box' }} />
+            </div>
+
+            {/* Start / End times */}
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '16px' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontFamily: "'Philosopher', sans-serif", fontWeight: '600', color: '#333', marginBottom: '6px', fontSize: '0.95rem' }}>Fell asleep</label>
+                <select value={sleepStart} onChange={e => setSleepStart(e.target.value)}
+                  style={{ width: '100%', padding: '8px 10px', border: '1px solid #8C8C8C', borderRadius: '4px', fontSize: '0.9rem' }}>
+                  {TIME_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontFamily: "'Philosopher', sans-serif", fontWeight: '600', color: '#333', marginBottom: '6px', fontSize: '0.95rem' }}>Woke up</label>
+                <select value={sleepEnd} onChange={e => setSleepEnd(e.target.value)}
+                  style={{ width: '100%', padding: '8px 10px', border: '1px solid #8C8C8C', borderRadius: '4px', fontSize: '0.9rem' }}>
+                  {TIME_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {/* Duration display */}
+            <div style={{ textAlign: 'center', marginBottom: '16px', color: '#2D6A4F', fontFamily: "'Philosopher', sans-serif", fontSize: '1rem', fontWeight: '600' }}>
+              {calcSleepDuration(sleepStart, sleepEnd).toFixed(1)} hours
+            </div>
+
+            {/* Quality */}
+            <div style={{ marginBottom: '24px' }}>
+              <label style={{ display: 'block', fontFamily: "'Philosopher', sans-serif", fontWeight: '600', color: '#333', marginBottom: '10px', fontSize: '0.95rem' }}>Sleep quality</label>
+              <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                {[1,2,3,4,5].map(n => (
+                  <button key={n} onClick={() => setSleepQuality(n)}
+                    style={{ width: '44px', height: '44px', borderRadius: '50%', border: `2px solid ${sleepQuality >= n ? '#2D6A4F' : '#d1d5db'}`, backgroundColor: sleepQuality >= n ? '#2D6A4F' : '#fff', color: sleepQuality >= n ? '#fff' : '#8C8C8C', cursor: 'pointer', fontSize: '1rem', fontWeight: '600' }}>
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <div style={{ textAlign: 'center', marginTop: '8px', fontSize: '0.85rem', color: '#8C8C8C' }}>
+                {['','Poor','Below average','Average','Good','Excellent'][sleepQuality] || 'Tap to rate'}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button onClick={() => setShowSleepModal(false)}
+                style={{ flex: 1, padding: '12px', backgroundColor: 'transparent', color: '#8C8C8C', border: '1px solid #d1d5db', borderRadius: '4px', cursor: 'pointer', fontFamily: "'Philosopher', sans-serif" }}>
+                Cancel
+              </button>
+              <button onClick={saveSleep}
+                style={{ flex: 2, padding: '12px', backgroundColor: '#2D6A4F', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontFamily: "'Philosopher', sans-serif", fontWeight: '600', fontSize: '1rem' }}>
+                Save Sleep
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Food & Drink Modal */}
+      {showFoodModal && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: '20px' }}>
+          <div style={{ backgroundColor: '#F5F5F0', borderRadius: '8px', padding: '28px', maxWidth: '480px', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
+            <h3 style={{ fontFamily: "'Philosopher', sans-serif", color: '#2D6A4F', marginTop: 0, marginBottom: '20px' }}>
+              🍽️ Log Food & Drink
+            </h3>
+
+            {/* Date */}
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontFamily: "'Philosopher', sans-serif", fontWeight: '600', color: '#333', marginBottom: '6px', fontSize: '0.95rem' }}>Date</label>
+              <input type="date" value={foodDate} onChange={e => setFoodDate(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid #8C8C8C', borderRadius: '4px', fontSize: '0.9rem', boxSizing: 'border-box' }} />
+            </div>
+
+            {/* Search */}
+            <div style={{ marginBottom: '12px' }}>
+              <label style={{ display: 'block', fontFamily: "'Philosopher', sans-serif", fontWeight: '600', color: '#333', marginBottom: '6px', fontSize: '0.95rem' }}>Search & add items</label>
+              <input type="text" value={foodSearch} onChange={e => setFoodSearch(e.target.value)}
+                placeholder="Search food or drink..."
+                style={{ width: '100%', padding: '8px 12px', border: '1px solid #8C8C8C', borderRadius: '4px', fontSize: '0.9rem', boxSizing: 'border-box', marginBottom: '8px' }} />
+              {foodSearch.trim() && (() => {
+                const term = foodSearch.trim();
+                const matches = allFoodItems.filter(f => f.toLowerCase().includes(term.toLowerCase()) && !foodEntries.find(e => e.name === f));
+                const isNew = !allFoodItems.some(f => f.toLowerCase() === term.toLowerCase());
+                return (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                    {matches.map(f => (
+                      <button key={f} onClick={() => addFoodEntry(f)}
+                        style={{ padding: '5px 12px', backgroundColor: '#F5F5F0', color: '#333', border: '1px solid #8C8C8C', borderRadius: '16px', cursor: 'pointer', fontSize: '0.85rem', fontFamily: "'Sorts Mill Goudy', Georgia, serif" }}>
+                        {f}
+                      </button>
+                    ))}
+                    {isNew && (
+                      <button onClick={() => addCustomFoodItem(term)}
+                        style={{ padding: '5px 12px', backgroundColor: '#E2D4B8', color: '#2D6A4F', border: '1px solid #4A9B73', borderRadius: '16px', cursor: 'pointer', fontSize: '0.85rem', fontFamily: "'Sorts Mill Goudy', Georgia, serif", fontStyle: 'italic' }}>
+                        + Add item
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Entries list */}
+            {foodEntries.length > 0 && (
+              <div style={{ marginBottom: '20px' }}>
+                <div style={{ fontSize: '0.85rem', color: '#8C8C8C', marginBottom: '8px', fontFamily: "'Philosopher', sans-serif" }}>
+                  Added items — time and meal are optional
+                </div>
+                {foodEntries.map((entry, idx) => (
+                  <div key={idx} style={{ backgroundColor: '#fff', borderRadius: '6px', padding: '10px 12px', marginBottom: '8px', border: '1px solid #e5e7eb' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <span style={{ fontFamily: "'Sorts Mill Goudy', Georgia, serif", fontWeight: '600', color: '#333' }}>{entry.name}</span>
+                      <button onClick={() => removeFoodEntry(idx)}
+                        style={{ background: 'none', border: 'none', color: '#8C8C8C', cursor: 'pointer', fontSize: '1rem', padding: '0 4px' }}>✕</button>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <select value={entry.bucket} onChange={e => updateFoodEntry(idx, 'bucket', e.target.value)}
+                        style={{ flex: 1, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: '4px', fontSize: '0.8rem', color: entry.bucket ? '#333' : '#8C8C8C' }}>
+                        <option value="">Meal type...</option>
+                        {MEAL_BUCKETS.map(b => <option key={b} value={b}>{b}</option>)}
+                      </select>
+                      <select value={entry.time} onChange={e => updateFoodEntry(idx, 'time', e.target.value)}
+                        style={{ flex: 1, padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: '4px', fontSize: '0.8rem', color: entry.time ? '#333' : '#8C8C8C' }}>
+                        <option value="">Time...</option>
+                        {TIME_OPTIONS.map(t => <option key={t} value={t}>{t}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button onClick={() => { setShowFoodModal(false); setFoodEntries([]); setFoodSearch(''); }}
+                style={{ flex: 1, padding: '12px', backgroundColor: 'transparent', color: '#8C8C8C', border: '1px solid #d1d5db', borderRadius: '4px', cursor: 'pointer', fontFamily: "'Philosopher', sans-serif" }}>
+                Cancel
+              </button>
+              <button onClick={saveFood} disabled={!foodEntries.length}
+                style={{ flex: 2, padding: '12px', backgroundColor: foodEntries.length ? '#2D6A4F' : '#d1d5db', color: '#fff', border: 'none', borderRadius: '4px', cursor: foodEntries.length ? 'pointer' : 'not-allowed', fontFamily: "'Philosopher', sans-serif", fontWeight: '600', fontSize: '1rem' }}>
+                Save {foodEntries.length > 0 ? `(${foodEntries.length} item${foodEntries.length > 1 ? 's' : ''})` : ''}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
