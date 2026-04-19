@@ -47,9 +47,14 @@ const ThreePotTracker = () => {
   // Auth state
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [authMode, setAuthMode] = useState('login'); // 'login' or 'signup'
+  const [authMode, setAuthMode] = useState('login'); // 'login'|'signup'|'forgot'|'check-email'|'reset-password'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [resetEmail, setResetEmail] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [resetError, setResetError] = useState('');
+  const [resetBanner, setResetBanner] = useState(false);
   const [authError, setAuthError] = useState('');
 
   // Tracker state
@@ -101,7 +106,13 @@ const ThreePotTracker = () => {
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+      if (_event === 'PASSWORD_RECOVERY') {
+        // User clicked the reset link — show new password form, don't enter app yet
+        setAuthMode('reset-password');
+        setUser(null);
+      } else {
+        setUser(session?.user ?? null);
+      }
     });
 
     return () => subscription.unsubscribe();
@@ -221,6 +232,52 @@ const ThreePotTracker = () => {
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
+  };
+
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    setResetError('');
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
+        redirectTo: `${window.location.origin}`
+      });
+      if (error) throw error;
+    } catch (err) {
+      // Don't reveal if email exists — always show the check-email screen
+      console.error(err);
+    }
+    // Always show confirmation regardless (security: don't reveal if email exists)
+    setAuthMode('check-email');
+  };
+
+  const handleResetPassword = async (e) => {
+    e.preventDefault();
+    setResetError('');
+    if (newPassword !== confirmPassword) {
+      setResetError('Passwords don\'t match — give it another go.');
+      return;
+    }
+    if (newPassword.length < 6) {
+      setResetError('Password needs to be at least 6 characters.');
+      return;
+    }
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      // Auto-login is already active (PASSWORD_RECOVERY session) — just enter the app
+      setResetBanner(true);
+      setNewPassword('');
+      setConfirmPassword('');
+      // Trigger the normal auth flow so user lands in the app
+      const { data: { session } } = await supabase.auth.getSession();
+      setUser(session?.user ?? null);
+    } catch (err) {
+      if (err.message?.includes('expired') || err.message?.includes('invalid')) {
+        setResetError('This reset link has expired. Request a new one below.');
+      } else {
+        setResetError(err.message || 'Something went wrong — please try again.');
+      }
+    }
   };
 
   const saveCheckIn = async () => {
@@ -638,130 +695,152 @@ const ThreePotTracker = () => {
           Track your energy across Physical, Cognitive, and Emotional/Sensory domains
         </p>
 
-        <div style={{
-          backgroundColor: '#F5F5F0',
-          padding: '2rem',
-          borderRadius: '8px',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-        }}>
-          <div style={{ marginBottom: '1.5rem', textAlign: 'center' }}>
-            <button
-              onClick={() => setAuthMode('login')}
-              style={{
-                padding: '0.5rem 1.5rem',
-                marginRight: '1rem',
-                backgroundColor: authMode === 'login' ? '#2D6A4F' : 'transparent',
-                color: authMode === 'login' ? '#fff' : '#2D6A4F',
-                border: `2px solid #2D6A4F`,
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontFamily: "'Philosopher', sans-serif",
-                fontSize: '1rem'
-              }}
-            >
-              Login
-            </button>
-            <button
-              onClick={() => setAuthMode('signup')}
-              style={{
-                padding: '0.5rem 1.5rem',
-                backgroundColor: authMode === 'signup' ? '#2D6A4F' : 'transparent',
-                color: authMode === 'signup' ? '#fff' : '#2D6A4F',
-                border: `2px solid #2D6A4F`,
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontFamily: "'Philosopher', sans-serif",
-                fontSize: '1rem'
-              }}
-            >
-              Sign Up
-            </button>
-          </div>
+        <div style={{ backgroundColor: '#F5F5F0', padding: '2rem', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
 
-          <form onSubmit={authMode === 'login' ? handleLogin : handleSignUp}>
-            <div style={{ marginBottom: '1rem' }}>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>
-                Email
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                style={{
-                  width: '100%',
-                  padding: '0.75rem',
-                  border: '1px solid #8C8C8C',
-                  borderRadius: '4px',
-                  fontSize: '1rem',
-                  fontFamily: "'Sorts Mill Goudy', Georgia, serif"
-                }}
-              />
+          {/* ── Login / Sign Up ── */}
+          {(authMode === 'login' || authMode === 'signup') && (<>
+            <div style={{ marginBottom: '1.5rem', textAlign: 'center' }}>
+              {['login','signup'].map(mode => (
+                <button key={mode} onClick={() => { setAuthMode(mode); setAuthError(''); }}
+                  style={{ padding: '0.5rem 1.5rem', marginRight: mode === 'login' ? '1rem' : 0,
+                    backgroundColor: authMode === mode ? '#2D6A4F' : 'transparent',
+                    color: authMode === mode ? '#fff' : '#2D6A4F',
+                    border: '2px solid #2D6A4F', borderRadius: '4px', cursor: 'pointer',
+                    fontFamily: "'Philosopher', sans-serif", fontSize: '1rem' }}>
+                  {mode === 'login' ? 'Login' : 'Sign Up'}
+                </button>
+              ))}
             </div>
 
-            <div style={{ marginBottom: '1.5rem' }}>
-              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>
-                Password
-              </label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={6}
-                style={{
-                  width: '100%',
-                  padding: '0.75rem',
-                  border: '1px solid #8C8C8C',
-                  borderRadius: '4px',
-                  fontSize: '1rem',
-                  fontFamily: "'Sorts Mill Goudy', Georgia, serif"
-                }}
-              />
-            </div>
-
-            {authError && (
-              <div style={{
-                padding: '0.75rem',
-                backgroundColor: '#ffebee',
-                color: '#c62828',
-                borderRadius: '4px',
-                marginBottom: '1rem',
-                fontSize: '0.9rem'
-              }}>
-                {authError}
+            <form onSubmit={authMode === 'login' ? handleLogin : handleSignUp}>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Email</label>
+                <input type="email" value={email} onChange={e => setEmail(e.target.value)} required
+                  style={{ width: '100%', padding: '0.75rem', border: '1px solid #8C8C8C', borderRadius: '4px', fontSize: '1rem', fontFamily: "'Sorts Mill Goudy', Georgia, serif", boxSizing: 'border-box' }} />
               </div>
+              <div style={{ marginBottom: authMode === 'login' ? '0.5rem' : '1.5rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Password</label>
+                <input type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={6}
+                  style={{ width: '100%', padding: '0.75rem', border: '1px solid #8C8C8C', borderRadius: '4px', fontSize: '1rem', fontFamily: "'Sorts Mill Goudy', Georgia, serif", boxSizing: 'border-box' }} />
+              </div>
+
+              {authMode === 'login' && (
+                <div style={{ textAlign: 'right', marginBottom: '1.5rem' }}>
+                  <button type="button" onClick={() => { setAuthMode('forgot'); setResetEmail(email); setResetError(''); }}
+                    style={{ background: 'none', border: 'none', color: '#4A9B73', cursor: 'pointer', fontSize: '0.9rem', fontFamily: "'Sorts Mill Goudy', Georgia, serif", textDecoration: 'underline' }}>
+                    Forgot password?
+                  </button>
+                </div>
+              )}
+
+              {authError && (
+                <div style={{ padding: '0.75rem', backgroundColor: '#ffebee', color: '#c62828', borderRadius: '4px', marginBottom: '1rem', fontSize: '0.9rem' }}>
+                  {authError}
+                </div>
+              )}
+
+              <button type="submit"
+                style={{ width: '100%', padding: '0.75rem', backgroundColor: '#2D6A4F', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontFamily: "'Philosopher', sans-serif", fontSize: '1.1rem', fontWeight: '600' }}>
+                {authMode === 'login' ? 'Login' : 'Sign Up'}
+              </button>
+            </form>
+
+            {authMode === 'signup' && (
+              <p style={{ marginTop: '1rem', fontSize: '0.9rem', color: '#8C8C8C', textAlign: 'center' }}>
+                You'll receive a confirmation email after signing up
+              </p>
             )}
+          </>)}
 
-            <button
-              type="submit"
-              style={{
-                width: '100%',
-                padding: '0.75rem',
-                backgroundColor: '#2D6A4F',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontFamily: "'Philosopher', sans-serif",
-                fontSize: '1.1rem',
-                fontWeight: '600'
-              }}
-            >
-              {authMode === 'login' ? 'Login' : 'Sign Up'}
-            </button>
-          </form>
-
-          {authMode === 'signup' && (
-            <p style={{
-              marginTop: '1rem',
-              fontSize: '0.9rem',
-              color: '#8C8C8C',
-              textAlign: 'center'
-            }}>
-              You'll receive a confirmation email after signing up
-            </p>
+          {/* ── Forgot Password ── */}
+          {authMode === 'forgot' && (
+            <form onSubmit={handleForgotPassword}>
+              <h2 style={{ fontFamily: "'Philosopher', sans-serif", color: '#2D6A4F', marginTop: 0, marginBottom: '0.5rem' }}>
+                Forgot your password?
+              </h2>
+              <p style={{ color: '#666', fontSize: '0.95rem', marginBottom: '1.5rem', lineHeight: '1.6' }}>
+                Don't worry — we're an ADHD service, nobody just logs in straightforwardly here! Enter your email and we'll send you a reset link.
+              </p>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Email address</label>
+                <input type="email" value={resetEmail} onChange={e => setResetEmail(e.target.value)} required autoFocus
+                  style={{ width: '100%', padding: '0.75rem', border: '1px solid #8C8C8C', borderRadius: '4px', fontSize: '1rem', fontFamily: "'Sorts Mill Goudy', Georgia, serif", boxSizing: 'border-box' }} />
+              </div>
+              {resetError && (
+                <div style={{ padding: '0.75rem', backgroundColor: '#ffebee', color: '#c62828', borderRadius: '4px', marginBottom: '1rem', fontSize: '0.9rem' }}>{resetError}</div>
+              )}
+              <button type="submit"
+                style={{ width: '100%', padding: '0.75rem', backgroundColor: '#2D6A4F', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontFamily: "'Philosopher', sans-serif", fontSize: '1.1rem', fontWeight: '600', marginBottom: '1rem' }}>
+                Send reset link
+              </button>
+              <div style={{ textAlign: 'center' }}>
+                <button type="button" onClick={() => setAuthMode('login')}
+                  style={{ background: 'none', border: 'none', color: '#4A9B73', cursor: 'pointer', fontSize: '0.9rem', fontFamily: "'Sorts Mill Goudy', Georgia, serif", textDecoration: 'underline' }}>
+                  Back to login
+                </button>
+              </div>
+            </form>
           )}
+
+          {/* ── Check Email confirmation ── */}
+          {authMode === 'check-email' && (
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>📬</div>
+              <h2 style={{ fontFamily: "'Philosopher', sans-serif", color: '#2D6A4F', marginTop: 0, marginBottom: '0.75rem' }}>
+                Check your inbox
+              </h2>
+              <p style={{ color: '#666', fontSize: '0.95rem', lineHeight: '1.6', marginBottom: '1.5rem' }}>
+                If that email is registered, a reset link is on its way. The link expires in 1 hour.
+              </p>
+              <p style={{ color: '#8C8C8C', fontSize: '0.85rem', lineHeight: '1.6', marginBottom: '1.5rem' }}>
+                No email? Check your spam folder, or make sure you used the address you signed up with.
+              </p>
+              <button onClick={() => setAuthMode('forgot')}
+                style={{ background: 'none', border: 'none', color: '#4A9B73', cursor: 'pointer', fontSize: '0.9rem', fontFamily: "'Sorts Mill Goudy', Georgia, serif", textDecoration: 'underline' }}>
+                Try a different email
+              </button>
+            </div>
+          )}
+
+          {/* ── Reset Password (after clicking email link) ── */}
+          {authMode === 'reset-password' && (
+            <form onSubmit={handleResetPassword}>
+              <h2 style={{ fontFamily: "'Philosopher', sans-serif", color: '#2D6A4F', marginTop: 0, marginBottom: '0.5rem' }}>
+                Set new password
+              </h2>
+              <p style={{ color: '#666', fontSize: '0.95rem', marginBottom: '1.5rem', lineHeight: '1.6' }}>
+                Let's get you back in. Choose a new password below.
+              </p>
+              <div style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>New password</label>
+                <input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} required minLength={6} autoFocus
+                  style={{ width: '100%', padding: '0.75rem', border: '1px solid #8C8C8C', borderRadius: '4px', fontSize: '1rem', fontFamily: "'Sorts Mill Goudy', Georgia, serif", boxSizing: 'border-box' }} />
+              </div>
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: '500' }}>Confirm password</label>
+                <input type="password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required minLength={6}
+                  style={{ width: '100%', padding: '0.75rem', border: '1px solid #8C8C8C', borderRadius: '4px', fontSize: '1rem', fontFamily: "'Sorts Mill Goudy', Georgia, serif", boxSizing: 'border-box' }} />
+              </div>
+              {resetError && (
+                <div style={{ padding: '0.75rem', backgroundColor: '#ffebee', color: '#c62828', borderRadius: '4px', marginBottom: '1rem', fontSize: '0.9rem', lineHeight: '1.5' }}>
+                  {resetError}
+                  {resetError.includes('expired') && (
+                    <div style={{ marginTop: '8px' }}>
+                      <button type="button" onClick={() => setAuthMode('forgot')}
+                        style={{ background: 'none', border: 'none', color: '#c62828', cursor: 'pointer', fontSize: '0.9rem', textDecoration: 'underline', padding: 0 }}>
+                        Request a new link
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              <button type="submit"
+                style={{ width: '100%', padding: '0.75rem', backgroundColor: '#2D6A4F', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontFamily: "'Philosopher', sans-serif", fontSize: '1.1rem', fontWeight: '600' }}>
+                Reset password
+              </button>
+            </form>
+          )}
+
         </div>
       </div>
     );
@@ -778,6 +857,17 @@ const ThreePotTracker = () => {
       backgroundColor: '#E2D4B8',
       minHeight: '100vh'
     }}>
+      {/* Password reset success banner */}
+      {resetBanner && (
+        <div style={{ backgroundColor: '#d1fae5', border: '1px solid #4A9B73', borderRadius: '6px', padding: '12px 16px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ color: '#2D6A4F', fontFamily: "'Philosopher', sans-serif", fontWeight: '600' }}>
+            ✓ Password updated — you're back in!
+          </span>
+          <button onClick={() => setResetBanner(false)}
+            style={{ background: 'none', border: 'none', color: '#4A9B73', cursor: 'pointer', fontSize: '1.1rem', padding: '0 4px' }}>✕</button>
+        </div>
+      )}
+
       {/* Header with logout */}
       <div style={{ 
         display: 'flex', 
